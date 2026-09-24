@@ -1,0 +1,11 @@
+# Trained model artifacts
+**/*.keras
+
+# Local training datasets and generated frames
+**/IMAGE_DATASET/
+**/VIDEO_DATASET/
+**/VIDEO_FRAMES/
+
+# Python cache files
+__pycache__/
+*.py[cod]
