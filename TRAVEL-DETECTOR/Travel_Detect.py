@@ -3,6 +3,7 @@ import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import argparse
 import sys
+import time
 import numpy as np
 import tensorflow as tf
 from collections import Counter
@@ -49,7 +50,9 @@ VIDEO_DIR = PROJECT_DIR / "VIDEO_DATASET"
 VIDEO_FRAME_DIR = PROJECT_DIR / "VIDEO_FRAMES"
 MODEL_PATH = PROJECT_DIR / "BEST-RUNS" / "basketball_travel_model.keras"
 BATCH_SIZE = 16
-IMG_SIZE = (224, 224) 
+IMG_SIZE = (224, 224)
+#offer quick, balanced, and full frame counts for travel inference
+INFERENCE_FRAME_OPTIONS = (8, 16, 32)
 
 #train or test a previous model
 parser = argparse.ArgumentParser(description="Train or test the basketball foul classifier.")
@@ -67,6 +70,13 @@ parser.add_argument(
     "--test",
     type=Path,
     help="Video to classify when using an existing model."
+)
+parser.add_argument(
+    "--inference-frames",
+    type=int,
+    choices=INFERENCE_FRAME_OPTIONS,
+    default=32,
+    help="Number of evenly spaced frames to analyze from the test video."
 )
 args = parser.parse_args()
 
@@ -108,10 +118,34 @@ def read_video_frames(video_path, maximum_frames=32):
     return frames
 
 
-def test_saved_model(model_path, input_path):
-    """Load a saved model and classify one video without retraining."""
+def analyze_video(model, video_path, maximum_frames):
+    """Decode, preprocess, and classify a batch of evenly sampled frames."""
     import cv2
 
+    #decode only the requested number of evenly spaced frames
+    decoding_started = time.perf_counter()
+    frames = read_video_frames(video_path, maximum_frames=maximum_frames)
+    decoding_seconds = time.perf_counter() - decoding_started
+
+    #resize and prepare every selected frame before making one model call
+    preprocessing_started = time.perf_counter()
+    rgb_frames = np.stack([cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) for frame in frames])
+    batch = tf.cast(tf.image.resize(rgb_frames, IMG_SIZE), tf.float32)
+    preprocessing_seconds = time.perf_counter() - preprocessing_started
+
+    #time the batched model prediction separately
+    inference_started = time.perf_counter()
+    scores = model.predict(batch, verbose=0).reshape(-1)
+    inference_seconds = time.perf_counter() - inference_started
+    return float(np.mean(scores)), len(frames), {
+        "decoding": decoding_seconds,
+        "preprocessing": preprocessing_seconds,
+        "inference": inference_seconds,
+    }
+
+
+def test_saved_model(model_path, input_path):
+    """Load a saved model and classify one video without retraining."""
     if not model_path.is_file():
         raise FileNotFoundError(f"Saved model was not found: {model_path}")
     if not input_path.is_file():
@@ -129,15 +163,14 @@ def test_saved_model(model_path, input_path):
     if input_path.suffix.lower() not in video_extensions:
         raise ValueError("Video input is required; image detection is not supported")
 
-    frames = read_video_frames(input_path)
-    scores = []
-    for frame in frames:
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frame = tf.image.resize(frame, IMG_SIZE)
-        frame_array = tf.expand_dims(tf.cast(frame, tf.float32), 0)
-        scores.append(float(model.predict(frame_array, verbose=0)[0][0]))
-    score = float(np.mean(scores))
-    print(f"Decoded {len(frames)} video frame(s)")
+    score, frame_count, timings = analyze_video(model, input_path, args.inference_frames)
+    print(f"Decoded {frame_count} video frame(s)")
+    print(
+        "Timing: "
+        f"decode {timings['decoding']:.3f}s, "
+        f"preprocess {timings['preprocessing']:.3f}s, "
+        f"predict {timings['inference']:.3f}s"
+    )
 
     label = class_names[1] if score >= 0.5 else class_names[0]
     confidence = score * 100 if score >= 0.5 else (1 - score) * 100
@@ -169,7 +202,7 @@ def extract_video_frames(video_dir, frame_dir, class_names, default_class):
     for class_name in class_names:
         (frame_dir / class_name).mkdir(parents=True, exist_ok=True)
     video_paths = [path for path in video_dir.rglob('*') if path.suffix.lower() in video_extensions]
-    
+
     #go through the paths including the videos, and ensure that they are properly formatted and able to be prcessed
     for video_path in video_paths:
         parent_class = video_path.parent.name
@@ -238,7 +271,7 @@ test_dataset = validation_dataset.take(val_batches // 2)
 validation_dataset = validation_dataset.skip(val_batches // 2)
 print(f"Validation batches: {int(val_batches) - int(val_batches // 2)}, Test batches: {int(val_batches // 2)}")
 
-#data Augmentation to help with the lack of data leading to issues such as overfitting 
+#data Augmentation to help with the lack of data leading to issues such as overfitting
 data_augmentation = tf.keras.Sequential([
     tf.keras.layers.RandomFlip("horizontal_and_vertical", seed=42),
     tf.keras.layers.RandomRotation(0.3, seed=42), #Increased from 0.2
@@ -274,24 +307,24 @@ with strategy.scope():
         metrics=['accuracy']
     )
 
-#Learning Rate Reduction = (lr) and Early Stopping Callbacks = (early_stopping) 
+#Learning Rate Reduction = (lr) and Early Stopping Callbacks = (early_stopping)
 early_stopping = tf.keras.callbacks.EarlyStopping(
-    monitor='val_loss', 
-    patience=10, 
-    
+    monitor='val_loss',
+    patience=10,
+
     #keep best preforming weights
-    restore_best_weights=True 
+    restore_best_weights=True
 )
 reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
-    monitor='val_loss', 
-    factor=0.2, 
-    patience=2, 
+    monitor='val_loss',
+    factor=0.2,
+    patience=2,
     min_lr=1e-6
 )
 
 #train Model
 print("TRAINING MODEL")
-epochs = 18 
+epochs = 18
 history = model.fit(
     train_dataset,
     validation_data=validation_dataset,
@@ -427,26 +460,22 @@ def predict_play(video_path):
         if Path(video_path).suffix.lower() not in video_extensions:
             raise ValueError("Video input is required; image detection is not supported")
 
-        import cv2
+        score, frame_count, timings = analyze_video(model, Path(video_path), args.inference_frames)
+        print(f"Decoded {frame_count} video frame(s)")
+        print(
+            "Timing: "
+            f"decode {timings['decoding']:.3f}s, "
+            f"preprocess {timings['preprocessing']:.3f}s, "
+            f"predict {timings['inference']:.3f}s"
+        )
 
-        frame_scores = []
-        for frame in read_video_frames(Path(video_path)):
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame = tf.image.resize(frame, IMG_SIZE)
-            frame_array = tf.expand_dims(tf.cast(frame, tf.float32), 0)
-            frame_scores.append(model.predict(frame_array, verbose=0)[0][0])
-
-        if not frame_scores:
-            raise ValueError("The video frames could not be decoded")
-        score = float(np.mean(frame_scores))
-
-        #score > 0.5 is a foul or it is a block (SIGMOID FUNCTION)
+        #score > 0.5 selects the positive class from the sigmoid output
         #confidence is the confidence of a model in its prediciton, SCORES WILL BE CHANGED BASED OFF MODEL ACCURACY
         if score >= 0.5:
-            label = class_names[1] 
+            label = class_names[1]
             confidence = score * 100
         else:
-            label = class_names[0]  
+            label = class_names[0]
             confidence = (1 - score) * 100
 
         print(f"Result: {label} (Confidence: {confidence:.2f}%)")
