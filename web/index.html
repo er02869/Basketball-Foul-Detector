@@ -12,29 +12,20 @@
 <body>
   <aside class="sidebar">
     <div class="side-brand">Cap<span>Stone</span></div>
-    <div class="eyebrow">Violation systems</div>
+    <div class="eyebrow">Violation Detectors</div>
     <div id="detector-status"></div>
-    <p class="side-note">Predictions are experimental until each model has been trained and validated.</p>
+    <p class="side-note">Predictions are experimental and results may be incorrect.</p>
   </aside>
   <main class="main-shell">
     <header class="hero">
-      <div class="brand-row"><div class="brand-mark">CV</div><div class="brand">CourtVision / AI officiating lab</div></div>
-      <div class="eyebrow">Video intelligence for the hardwood</div>
-      <p>Upload a basketball clip and let the available detectors inspect the action frame by frame.</p>
+      <div class="brand-row"><div class="brand-mark">CV</div><div class="brand">CourtVision: The AI Referee</div></div>
+      <div class="eyebrow">Video intelligence for Basketball</div>
+      <p>Upload a basketball clip and the detectors will inspect the action frame by frame.</p>
     </header>
     <section class="upload-panel">
       <div class="section-label">01 / Load game footage</div>
-      <h2>Drop a clip into the review room</h2>
+      <h2>Drop a clip for review</h2>
       <p>MP4, MOV, AVI, MKV, or WMV. Up to 32 sampled frames per detector.</p>
-      <!--let the travel detector trade frame count for inference speed-->
-      <div class="frame-control">
-        <label for="travel-frame-count">Travel classifier frames</label>
-        <select id="travel-frame-count">
-          <option value="8">8 frames / fastest</option>
-          <option value="16">16 frames / balanced</option>
-          <option value="32" selected>32 frames / full sample</option>
-        </select>
-      </div>
       <label class="dropzone" id="dropzone">
         <input id="video-input" type="file" accept="video/*">
         <strong id="file-name">Choose a video file</strong>
@@ -42,12 +33,8 @@
       </label>
       <button class="primary-button" id="analyze-button" disabled>Analyze video</button>
     </section>
-    <section class="preview-section hidden" id="preview-section">
-      <div class="section-label">02 / Review clip</div>
-      <video id="video-preview" controls></video>
-    </section>
     <section class="results-section hidden" id="results-section">
-      <div class="section-label">03 / Official review</div>
+      <div class="section-label">02 / Detector results</div>
       <div class="results-heading"><h2>Detector results</h2><span id="frame-count"></span></div>
       <div class="result-grid" id="results-grid"></div>
     </section>

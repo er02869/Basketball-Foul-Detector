@@ -17,6 +17,17 @@ MAX_FRAMES = 32
 TRAVEL_INFERENCE_FRAME_OPTIONS = (8, 16, 32)
 VIDEO_EXTENSIONS = {".avi", ".m4v", ".mkv", ".mov", ".mp4", ".mpeg", ".wmv"}
 
+GPU_DEVICES = tf.config.list_physical_devices("GPU")
+for gpu in GPU_DEVICES:
+    try:
+        tf.config.experimental.set_memory_growth(gpu, True)
+    except RuntimeError as error:
+        raise RuntimeError(
+            f"Could not enable memory growth for TensorFlow GPU {gpu.name}: {error}"
+        ) from error
+tf.config.set_soft_device_placement(True)
+INFERENCE_DEVICE = "/GPU:0" if GPU_DEVICES else "/CPU:0"
+
 
 @dataclass(frozen=True)
 class Detector:
@@ -32,8 +43,8 @@ class Detector:
 #connect each violation type to its saved training model and output labels
 DETECTORS = (
     Detector(
-        "Foul",
-        "Contact or illegal defensive action",
+        "Shooting-Fouls",
+        "Contact or illegal defensive action while the offense is attempting a shot",
         next((path for path in (PROJECT_DIR / "FOUL-DETECTOR/BEST-RUNS/basketball_foul_model.keras", PROJECT_DIR / "FOUL-DETECTOR/BEST-RUNS/basketball_foul_model(1).keras") if path.is_file()), None),
         "Foul",
         "Clean",
@@ -84,6 +95,22 @@ def sample_video_frames(video_path: Path) -> list[np.ndarray]:
 _model_cache: dict[str, Any] = {}
 
 
+def accelerator_status() -> dict[str, str | bool]:
+    if not GPU_DEVICES:
+        return {
+            "available": False,
+            "device": "CPU",
+            "tensorflow_version": tf.__version__,
+        }
+
+    details = tf.config.experimental.get_device_details(GPU_DEVICES[0])
+    return {
+        "available": True,
+        "device": details.get("device_name", GPU_DEVICES[0].name),
+        "tensorflow_version": tf.__version__,
+    }
+
+
 def load_model(model_path: str) -> Any:
     if model_path not in _model_cache:
         _model_cache[model_path] = tf.keras.models.load_model(model_path, compile=False)
@@ -128,7 +155,9 @@ def predict_with_timing(
     preprocessing_ms = (perf_counter() - preprocessing_started) * 1000
 
     inference_started = perf_counter()
-    scores = np.asarray(model.predict(batch, verbose=0)).reshape(-1)
+    with tf.device(INFERENCE_DEVICE):
+        predictions = model(tf.convert_to_tensor(batch), training=False)
+    scores = np.asarray(predictions).reshape(-1)
     inference_ms = (perf_counter() - inference_started) * 1000
 
     #average frame scores, then map the binary score to a detector label
